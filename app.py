@@ -2,9 +2,9 @@
 import streamlit as st
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
+from groq import Groq   
 import faiss
 import numpy as np
-import ollama
 import io
 import hashlib
 import uuid
@@ -594,21 +594,21 @@ USER QUESTION:
 ANSWER:
 """
 
-                    response = ollama.chat(
-                        model="llama3.2:1b",
+                    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+                    response = client.chat.completions.create(
+                        model="openai/gpt-oss-20b",
                         messages=[
                             {
                                 "role": "user",
                                 "content": prompt
                             }
                         ],
-                        options={
-                            "temperature": 0.2,
-                            "num_predict": 300
-                        }
+                        temperature=0.2,
+                        max_completion_tokens=300
                     )
 
-                    answer = response["message"]["content"]
+                    answer = response.choices[0].message.content
 
                     st.markdown(answer)
 
@@ -629,8 +629,7 @@ ANSWER:
 
             error_message = (
                 "I couldn't generate an answer. "
-                "Please check that Ollama is running and "
-                "llama3.2:1b is installed."
+                "Please check that Groq API is configured correctly."
             )
 
             st.error(error_message)
