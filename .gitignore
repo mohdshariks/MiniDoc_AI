@@ -1,0 +1,7 @@
+rag_env/
+rag_env312/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+vector_db/
