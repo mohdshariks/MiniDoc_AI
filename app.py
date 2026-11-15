@@ -3,10 +3,6 @@ import uuid
 
 import streamlit as st
 
-st.info(
-    "🚧 MiniDoc AI is currently under development. "
-    "Some features may change or experience issues."
-)
 
 from config import setup_app, init_state
 from pdf_processor import (
@@ -424,6 +420,11 @@ if subject is None:
 # Header
 # ----------------------------------------------
 
+
+# ----------------------------------------------
+# Header
+# ----------------------------------------------
+
 st.markdown(
     '<div class="main-title">📚 MiniDoc AI</div>',
     unsafe_allow_html=True,
@@ -435,6 +436,53 @@ st.markdown(
     f'</div>',
     unsafe_allow_html=True,
 )
+
+
+# ----------------------------------------------
+# Under Construction Banner
+# ----------------------------------------------
+
+st.markdown("""
+<div class="construction-banner">
+
+    <div class="construction-title">
+        🚧 UNDER CONSTRUCTION
+    </div>
+
+    <div class="construction-description">
+        MiniDoc AI is actively being developed.
+        New features and improvements are coming soon!
+    </div>
+
+</div>
+
+<style>
+
+.construction-banner {
+    background: rgba(217, 119, 6, 0.10);
+    border: 1px solid #d97706;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 12px 0 22px 0;
+    text-align: center;
+}
+
+.construction-title {
+    color: #f59e0b;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.construction-description {
+    color: inherit;
+    font-size: 12px;
+    margin-top: 5px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 
 
 # ==================================================
