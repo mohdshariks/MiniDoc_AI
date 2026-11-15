@@ -1,6 +1,10 @@
 
 # 📚 MiniDoc AI – Intelligent PDF Assistant
 
+> 🚧 **Project Status: Under Construction**
+>
+> MiniDoc AI is actively being developed. New features, improvements, and bug fixes are in progress.
+
 Chat with your documents using AI and Retrieval-Augmented Generation (RAG).
 
 MiniDoc AI is an AI-powered PDF question-answering application built with Python and Streamlit. Upload PDF documents, ask questions in natural language, and receive answers based on the document content.

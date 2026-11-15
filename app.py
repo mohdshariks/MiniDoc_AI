@@ -3,6 +3,11 @@ import uuid
 
 import streamlit as st
 
+st.info(
+    "🚧 MiniDoc AI is currently under development. "
+    "Some features may change or experience issues."
+)
+
 from config import setup_app, init_state
 from pdf_processor import (
     process_pdf_batch,
