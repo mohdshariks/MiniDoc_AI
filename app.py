@@ -1,642 +1,664 @@
 
-import streamlit as st
-from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
-from groq import Groq   
-import faiss
-import numpy as np
-import io
-import hashlib
 import uuid
 
-# --------------------------------------------------
-# 1. PAGE CONFIGURATION
-# --------------------------------------------------
+import streamlit as st
 
-st.set_page_config(
-    page_title="MiniDoc AI",
-    page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded"
+from config import setup_app, init_state
+from pdf_processor import (
+    process_pdf_batch,
+    get_document_hash,
+    get_pdf_page_count,
+    BATCH_SIZE,
+)
+from retrieval import (
+    build_subject_index,
+    retrieve_chunks,
+)
+from llm import generate_answer
+from ui import (
+    show_pdf_viewer,
+    render_sources,
 )
 
-# --------------------------------------------------
-# 2. CUSTOM CSS - DARK SAAS DESIGN
-# --------------------------------------------------
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+# ==================================================
+# 1. APP INITIALIZATION
+# ==================================================
 
-:root {
-    --bg: #0b0d14;
-    --panel: #121622;
-    --panel2: #191f2e;
-    --border: #252d40;
-    --text: #f2f4fa;
-    --muted: #929bb0;
-    --accent: #8b7cff;
-    --accent2: #6654e8;
-}
+setup_app()
+init_state()
 
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
-}
 
-.stApp {
-    background: var(--bg);
-    color: var(--text);
-}
+# ==================================================
+# 2. SUBJECT MANAGEMENT
+# ==================================================
 
-[data-testid="stHeader"] {
-    background: rgba(11,13,20,0.9);
-}
+def create_subject(name):
+    """Create a new subject."""
 
-[data-testid="stSidebar"] {
-    background: #10131d;
-    border-right: 1px solid var(--border);
-}
+    subject_id = uuid.uuid4().hex[:8]
 
-[data-testid="stSidebar"] > div:first-child {
-    padding-top: 1.5rem;
-}
-
-.block-container {
-    max-width: 1200px;
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-}
-
-.brand {
-    font-size: 25px;
-    font-weight: 800;
-    letter-spacing: -1px;
-    color: white;
-    margin-bottom: 4px;
-}
-
-.brand span {
-    color: var(--accent);
-}
-
-.tagline {
-    color: var(--muted);
-    font-size: 12px;
-    margin-bottom: 25px;
-}
-
-.section-label {
-    color: #858fa7;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    margin-top: 22px;
-    margin-bottom: 10px;
-}
-
-.hero {
-    padding: 30px;
-    border-radius: 18px;
-    border: 1px solid var(--border);
-    background: linear-gradient(135deg, #171b2a, #111521);
-    margin-bottom: 25px;
-}
-
-.hero h1 {
-    font-size: clamp(25px, 4vw, 38px);
-    font-weight: 800;
-    letter-spacing: -1.5px;
-    margin: 0 0 10px 0;
-    color: #ffffff;
-}
-
-.hero p {
-    color: var(--muted);
-    font-size: 14px;
-    margin: 0;
-}
-
-.info-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    padding: 18px;
-    border-radius: 14px;
-    margin-bottom: 15px;
-}
-
-.info-card h4 {
-    color: white;
-    margin: 0 0 6px 0;
-    font-size: 14px;
-}
-
-.info-card p {
-    color: var(--muted);
-    font-size: 12px;
-    margin: 0;
-}
-
-.stButton > button {
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--panel2);
-    color: white;
-    font-weight: 600;
-    min-height: 42px;
-    transition: all 0.2s ease;
-}
-
-.stButton > button:hover {
-    border-color: var(--accent);
-    color: white;
-}
-
-.stButton > button[kind="primary"] {
-    background: linear-gradient(90deg, #7565f5, #8d71ff);
-    border: none;
-    color: white;
-}
-
-.stTextInput input, .stTextArea textarea {
-    background: var(--panel);
-    color: white;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-}
-
-[data-testid="stFileUploader"] {
-    background: var(--panel);
-    border: 1px dashed #454e68;
-    border-radius: 12px;
-    padding: 10px;
-}
-
-[data-testid="stChatMessage"] {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 15px;
-    margin-bottom: 12px;
-}
-
-.stChatInput textarea {
-    background: var(--panel);
-    color: white;
-}
-
-[data-testid="stExpander"] {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-}
-
-hr {
-    border-color: var(--border);
-}
-
-.muted {
-    color: var(--muted);
-    font-size: 12px;
-}
-
-@media (max-width: 768px) {
-    .block-container {
-        padding: 1rem 0.8rem 2rem 0.8rem;
+    st.session_state.subjects[subject_id] = {
+        "id": subject_id,
+        "name": name,
+        "documents": {},
+        "chunks": [],
+        "faiss_index": None,
+        "bm25_index": None,
+        "ready": False,
+        "messages": [],
     }
 
-    .hero {
-        padding: 20px;
-        border-radius: 14px;
-    }
+    st.session_state.active_subject = subject_id
 
-    .hero h1 {
-        font-size: 26px;
-    }
 
-    [data-testid="stSidebar"] {
-        min-width: 0;
-    }
+def get_active_subject():
+    """Return the currently selected subject."""
 
-    [data-testid="stChatMessage"] {
-        padding: 10px;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
+    subject_id = st.session_state.active_subject
 
-# --------------------------------------------------
-# 3. SESSION STATE
-# --------------------------------------------------
+    if subject_id is None:
+        return None
 
-def create_chat():
-    chat_id = uuid.uuid4().hex[:8]
-    st.session_state.chats[chat_id] = {
-        "title": "New conversation",
-        "messages": []
-    }
-    st.session_state.active_chat = chat_id
+    return st.session_state.subjects.get(subject_id)
 
-if "chats" not in st.session_state:
-    st.session_state.chats = {}
-    create_chat()
 
-if "active_chat" not in st.session_state:
-    create_chat()
+# Create a default subject on first launch
+if not st.session_state.subjects:
+    create_subject("My First Subject")
 
-if "index" not in st.session_state:
-    st.session_state.index = None
 
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-
-if "pages" not in st.session_state:
-    st.session_state.pages = []
-
-if "uploaded_hash" not in st.session_state:
-    st.session_state.uploaded_hash = None
-
-if "document_name" not in st.session_state:
-    st.session_state.document_name = None
-
-# --------------------------------------------------
-# 4. LOAD EMBEDDING MODEL
-# --------------------------------------------------
-
-@st.cache_resource
-def load_embedding_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
-# --------------------------------------------------
-# 5. DOCUMENT CHUNKING
-# --------------------------------------------------
-
-def create_chunks(text, chunk_size=1000, overlap=150):
-    chunks = []
-    start = 0
-
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-
-        if chunk.strip():
-            chunks.append(chunk)
-
-        start += chunk_size - overlap
-
-    return chunks
-
-# --------------------------------------------------
-# 6. RESET DOCUMENT WHEN A NEW PDF IS UPLOADED
-# --------------------------------------------------
-
-def reset_document():
-    st.session_state.index = None
-    st.session_state.chunks = []
-    st.session_state.pages = []
-    st.session_state.document_name = None
-    st.session_state.chats = {}
-    create_chat()
-
-# --------------------------------------------------
-# 7. SIDEBAR
-# --------------------------------------------------
+# ==================================================
+# 3. SIDEBAR
+# ==================================================
 
 with st.sidebar:
 
-    st.markdown(
-        '<div class="brand">MiniDoc<span>.AI</span></div>',
-        unsafe_allow_html=True
-    )
+    st.markdown("## 📚 MiniDoc AI")
 
-    st.markdown(
-        '<div class="tagline">Your intelligent document assistant</div>',
-        unsafe_allow_html=True
-    )
-
-    st.markdown('<div class="section-label">Workspace</div>',
-                unsafe_allow_html=True)
-
-    if st.button("＋  New Chat", use_container_width=True):
-        create_chat()
-        st.rerun()
-
-    st.markdown('<div class="section-label">Upload Document</div>',
-                unsafe_allow_html=True)
-
-    uploaded_file = st.file_uploader(
-        "Choose a PDF document",
-        type=["pdf"],
-        key="pdf_uploader"
-    )
-
-    if uploaded_file:
-        file_bytes = uploaded_file.getvalue()
-        current_hash = hashlib.sha256(file_bytes).hexdigest()
-
-        if current_hash != st.session_state.uploaded_hash:
-            reset_document()
-            st.session_state.uploaded_hash = current_hash
-            st.session_state.document_name = uploaded_file.name
-
-        st.caption(f"📄 {uploaded_file.name}")
-
-        if st.button(
-            "⚡ Process PDF",
-            type="primary",
-            use_container_width=True
-        ):
-            try:
-                with st.spinner("Reading and processing your PDF..."):
-
-                    reader = PdfReader(io.BytesIO(file_bytes))
-
-                    all_chunks = []
-                    page_numbers = []
-
-                    for page_num, page in enumerate(reader.pages):
-                        text = page.extract_text() or ""
-                        page_chunks = create_chunks(text)
-
-                        all_chunks.extend(page_chunks)
-                        page_numbers.extend(
-                            [page_num + 1] * len(page_chunks)
-                        )
-
-                    if not all_chunks:
-                        st.error("No readable text found in this PDF.")
-                    else:
-                        model = load_embedding_model()
-
-                        embeddings = model.encode(
-                            all_chunks,
-                            normalize_embeddings=True,
-                            show_progress_bar=False
-                        )
-
-                        index = faiss.IndexFlatIP(
-                            embeddings.shape[1]
-                        )
-
-                        index.add(
-                            np.asarray(embeddings, dtype="float32")
-                        )
-
-                        st.session_state.index = index
-                        st.session_state.chunks = all_chunks
-                        st.session_state.pages = page_numbers
-
-                        st.success("PDF processed successfully!")
-
-            except Exception as e:
-                st.error(f"PDF processing error: {e}")
-
-    if st.session_state.index is not None:
-        st.markdown('<div class="section-label">Active Document</div>',
-                    unsafe_allow_html=True)
-
-        st.success("● Document ready")
-
-        st.caption(st.session_state.document_name)
-
-        st.caption(
-            f"{len(st.session_state.chunks)} text chunks indexed"
-        )
-
-    st.markdown('<div class="section-label">Chat History</div>',
-                unsafe_allow_html=True)
-
-    for chat_id, chat in reversed(
-        list(st.session_state.chats.items())
-    ):
-        label = "💬 " + chat["title"][:25]
-
-        if st.button(
-            label,
-            key=f"chat_{chat_id}",
-            use_container_width=True
-        ):
-            st.session_state.active_chat = chat_id
-            st.rerun()
+    st.caption("Your personal PDF study assistant")
 
     st.divider()
 
-    if st.button("🗑 Clear Current Chat", use_container_width=True):
-        st.session_state.chats[st.session_state.active_chat][
-            "messages"
-        ] = []
-        st.session_state.chats[st.session_state.active_chat][
-            "title"
-        ] = "New conversation"
-        st.rerun()
+    # ----------------------------------------------
+    # Subject selection
+    # ----------------------------------------------
 
-    st.markdown(
-        '<p class="muted">MiniDoc AI · Powered by RAG</p>',
-        unsafe_allow_html=True
+    st.markdown("### 📖 My Subjects")
+
+    subject_ids = list(
+        st.session_state.subjects.keys()
     )
 
-# --------------------------------------------------
-# 8. MAIN DASHBOARD
-# --------------------------------------------------
+    subject_names = {
+        subject_id: st.session_state.subjects[subject_id]["name"]
+        for subject_id in subject_ids
+    }
 
-st.markdown("""
-<div class="hero">
-    <h1>Chat with your documents. ✨</h1>
-    <p>
-        Upload a PDF, ask questions, and get answers
-        grounded in your document.
-    </p>
-</div>
-""", unsafe_allow_html=True)
+    current_subject_id = st.session_state.active_subject
 
-# --------------------------------------------------
-# 9. FEATURE CARDS
-# --------------------------------------------------
+    if current_subject_id not in subject_ids:
+        current_subject_id = subject_ids[0]
 
-col1, col2, col3 = st.columns(3)
+    selected_subject = st.selectbox(
+        "Select subject",
+        options=subject_ids,
+        index=subject_ids.index(current_subject_id),
+        format_func=lambda subject_id: subject_names[subject_id],
+        key="subject_selector",
+    )
 
-with col1:
-    st.markdown("""
-    <div class="info-card">
-        <h4>📄 PDF Intelligence</h4>
-        <p>Extract and understand your PDF documents.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    if selected_subject != st.session_state.active_subject:
 
-with col2:
-    st.markdown("""
-    <div class="info-card">
-        <h4>🔍 Smart Retrieval</h4>
-        <p>Find relevant information using vector search.</p>
-    </div>
-    """, unsafe_allow_html=True)
+        st.session_state.active_subject = selected_subject
 
-with col3:
-    st.markdown("""
-    <div class="info-card">
-        <h4>🤖 AI Answers</h4>
-        <p>Get answers generated using your document context.</p>
-    </div>
-    """, unsafe_allow_html=True)
+        st.session_state.viewer_document = None
+        st.session_state.viewer_page = 1
 
-# --------------------------------------------------
-# 10. CHAT INTERFACE
-# --------------------------------------------------
+        st.rerun()
 
-active_chat = st.session_state.chats[
-    st.session_state.active_chat
-]
+    # ----------------------------------------------
+    # Create subject
+    # ----------------------------------------------
 
-st.subheader("💬 Document Assistant")
+    with st.expander("➕ Create New Subject"):
 
-if st.session_state.index is None:
+        new_subject_name = st.text_input(
+            "Subject name",
+            placeholder="Example: Computer Science",
+            key="new_subject_name",
+        )
 
-    st.markdown("""
-    <div class="info-card">
-        <h4>👋 Welcome to MiniDoc AI!</h4>
-        <p>
-            Start by uploading a PDF from the sidebar.
-            Process it, then ask your first question.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+        if st.button(
+            "Create Subject",
+            use_container_width=True,
+        ):
 
-else:
+            if new_subject_name.strip():
 
-    for message in active_chat["messages"]:
+                create_subject(
+                    new_subject_name.strip()
+                )
 
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+                st.session_state.new_subject_name = ""
 
-            if message.get("sources"):
-                with st.expander("📚 View retrieved sources"):
-                    for source in message["sources"]:
-                        st.markdown(
-                            f"**Page {source['page']}**"
-                        )
-                        st.write(source["text"])
+                st.rerun()
+
+            else:
+                st.warning("Please enter a subject name.")
+
+    subject = get_active_subject()
+
+    st.divider()
+
+    # ----------------------------------------------
+    # PDF uploader
+    # ----------------------------------------------
+
+    st.markdown("### 📤 Upload PDFs")
+
+    uploaded_files = st.file_uploader(
+        "Upload your study materials",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="pdf_uploader",
+    )
+
+    st.caption(
+        f"Maximum {BATCH_SIZE} uncached pages per PDF "
+        "per processing click."
+    )
+
+    # ----------------------------------------------
+    # Process PDFs
+    # ----------------------------------------------
+
+    if st.button(
+        "⚙️ Process PDFs",
+        type="primary",
+        use_container_width=True,
+        disabled=not uploaded_files,
+    ):
+
+        for uploaded_file in uploaded_files:
+
+            pdf_bytes = uploaded_file.getvalue()
+
+            document_name = uploaded_file.name
+
+            document_hash = get_document_hash(
+                pdf_bytes
+            )
+
+            st.markdown("---")
+
+            st.markdown(
+                f"**📄 Processing: {document_name}**"
+            )
+
+            try:
+
+                total_pages = get_pdf_page_count(
+                    pdf_bytes
+                )
+
+                # Create or retrieve document record
+                if document_hash not in subject["documents"]:
+
+                    subject["documents"][document_hash] = {
+                        "name": document_name,
+                        "hash": document_hash,
+                        "bytes": pdf_bytes,
+                        "chunks": [],
+                        "total_pages": total_pages,
+                        "processed_pages": 0,
+                        "ocr_pages": 0,
+                        "next_page": 1,
+                        "completed": False,
+                    }
+
+                document = subject["documents"][document_hash]
+
+                # Refresh PDF bytes and name
+                document["name"] = document_name
+                document["bytes"] = pdf_bytes
+                document["total_pages"] = total_pages
+
+                start_page = document.get(
+                    "next_page",
+                    1
+                )
+
+                # If this document was already processed,
+                # rebuild its chunks from the persistent cache.
+                if start_page > total_pages:
+
+                    start_page = 1
+                    end_page = total_pages
+
+                else:
+
+                    end_page = total_pages
+
+                result = process_pdf_batch(
+                    pdf_bytes=pdf_bytes,
+                    document_name=document_name,
+                    start_page=start_page,
+                    end_page=end_page,
+                    batch_size=BATCH_SIZE,
+                )
+
+                # Update document information
+                document["chunks"] = result["chunks"]
+
+                document["processed_pages"] = result["processed_pages"]
+
+                document["ocr_pages"] = result["ocr_pages"]
+
+                document["next_page"] = result["next_page"]
+
+                document["completed"] = result["completed"]
+
+                # Build the subject's complete search index
+                indexed = build_subject_index(
+                    subject
+                )
+
+                if result["completed"]:
+
+                    st.success(
+                        f"Completed: {document_name}"
+                    )
+
+                else:
+
+                    st.info(
+                        f"Batch completed for {document_name}. "
+                        f"Next page: {result['next_page']}"
+                    )
+
+                st.write(
+                    f"Pages cached: {result['processed_pages']} "
+                    f"/ {result['total_pages']}"
+                )
+
+                st.write(
+                    f"OCR pages: {result['ocr_pages']}"
+                )
+
+                st.write(
+                    f"Chunks created: {len(result['chunks'])}"
+                )
+
+                if not indexed:
+
+                    st.warning(
+                        "No searchable text was found in this PDF."
+                    )
+
+            except Exception as error:
+
+                st.error(
+                    f"Could not process {document_name}: {error}"
+                )
+
+        st.rerun()
+
+    # ----------------------------------------------
+    # Processing status
+    # ----------------------------------------------
+
+    st.divider()
+
+    st.markdown("### 📊 Document Status")
+
+    if subject["documents"]:
+
+        for document in subject["documents"].values():
+
+            with st.expander(
+                f"📄 {document['name']}"
+            ):
+
+                st.write(
+                    f"Total pages: {document['total_pages']}"
+                )
+
+                st.write(
+                    f"Cached pages: {document['processed_pages']}"
+                )
+
+                st.write(
+                    f"OCR pages: {document['ocr_pages']}"
+                )
+
+                st.write(
+                    f"Next page: {document['next_page']}"
+                )
+
+                if document["completed"]:
+
+                    st.success("Processing completed")
+
+                else:
+
+                    st.warning("More pages need processing")
+
+    else:
+
+        st.caption("No PDFs uploaded yet.")
+
+    # ----------------------------------------------
+    # Clear PDFs
+    # ----------------------------------------------
+
+    st.divider()
+
+    if st.button(
+        "🗑️ Clear Subject PDFs",
+        use_container_width=True,
+    ):
+
+        subject["documents"] = {}
+        subject["chunks"] = []
+        subject["faiss_index"] = None
+        subject["bm25_index"] = None
+        subject["ready"] = False
+
+        st.session_state.viewer_document = None
+        st.session_state.viewer_page = 1
+
+        st.rerun()
+
+    # ----------------------------------------------
+    # New conversation
+    # ----------------------------------------------
+
+    if st.button(
+        "➕ New Conversation",
+        use_container_width=True,
+    ):
+
+        subject["messages"] = []
+
+        st.rerun()
+
+    # ----------------------------------------------
+    # Theme preference
+    # ----------------------------------------------
+
+    st.divider()
+
+    st.markdown("### ⚙️ Preferences")
+
+    st.selectbox(
+        "Theme preference",
+        ["Dark", "Light"],
+        key="theme",
+    )
+
+    st.caption(
+        "The theme preference is saved for future UI customization."
+    )
+
+
+# ==================================================
+# 4. MAIN APPLICATION
+# ==================================================
+
+subject = get_active_subject()
+
+if subject is None:
+
+    st.warning("Please select or create a subject.")
+
+    st.stop()
+
+
+# ----------------------------------------------
+# Header
+# ----------------------------------------------
+
+st.markdown(
+    '<div class="main-title">📚 MiniDoc AI</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    f'<div class="subtitle">'
+    f'Your AI study assistant · {subject["name"]}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ==================================================
+# 5. CHECK DOCUMENT AVAILABILITY
+# ==================================================
+
+if not subject["documents"]:
+
+    st.info(
+        "👋 Welcome to MiniDoc AI! "
+        "Upload your study PDFs from the sidebar "
+        "and click Process PDFs to get started."
+    )
+
+    st.stop()
+
+
+if not subject["ready"]:
+
+    st.warning(
+        "Your PDFs have not been indexed yet. "
+        "Please process your PDFs from the sidebar."
+    )
+
+    st.stop()
+
+
+# ==================================================
+# 6. CHAT AND PDF VIEWER LAYOUT
+# ==================================================
+
+chat_column, viewer_column = st.columns(
+    [1.05, 1],
+    gap="large",
+)
+
+
+# ==================================================
+# 7. CHAT INTERFACE
+# ==================================================
+
+with chat_column:
+
+    st.markdown("### 💬 Ask Your PDFs")
+
+    st.caption(
+        "Ask questions about your uploaded study materials."
+    )
+
+    # ----------------------------------------------
+    # Welcome message
+    # ----------------------------------------------
+
+    if not subject["messages"]:
+
+        with st.chat_message("assistant"):
+
+            st.markdown(
+                """
+                👋 Hello! Welcome to MiniDoc AI.
+
+                I can help you understand your uploaded PDFs.
+
+                **You can ask me:**
+                - Explain a topic in simple English.
+                - Summarize a chapter.
+                - Answer questions from your study material.
+                - Find definitions and important points.
+                - Explain multiple-choice questions.
+                """
+            )
+
+    # ----------------------------------------------
+    # Display chat history
+    # ----------------------------------------------
+
+    for message_index, message in enumerate(
+        subject["messages"]
+    ):
+
+        with st.chat_message(
+            message["role"]
+        ):
+
+            st.markdown(
+                message["content"]
+            )
+
+            if message["role"] == "assistant":
+
+                sources = message.get(
+                    "sources",
+                    []
+                )
+
+    # ----------------------------------------------
+    # Chat input
+    # ----------------------------------------------
 
     question = st.chat_input(
-        "Ask anything about your PDF..."
+        "Ask a question about your PDFs..."
     )
 
     if question:
 
-        if not active_chat["messages"]:
-            active_chat["title"] = question[:30]
-
-        active_chat["messages"].append({
+        # Save student question
+        subject["messages"].append({
             "role": "user",
-            "content": question
+            "content": question,
         })
 
+        # Display question
         with st.chat_message("user"):
+
             st.markdown(question)
 
-        try:
-            with st.chat_message("assistant"):
+        # Retrieve relevant PDF chunks
+        with st.chat_message("assistant"):
 
-                with st.spinner("Thinking..."):
+            with st.spinner(
+                "Searching your PDFs..."
+            ):
 
-                    model = load_embedding_model()
+                retrieved_chunks = retrieve_chunks(
+                    query=question,
+                    subject=subject,
+                    top_k=12,
+                )
 
-                    query_embedding = model.encode(
-                        [question],
-                        normalize_embeddings=True
+            if retrieved_chunks:
+
+                with st.spinner(
+                    "Preparing your answer..."
+                ):
+
+                    answer = generate_answer(
+                        question=question,
+                        retrieved_chunks=retrieved_chunks,
                     )
 
-                    number_of_results = min(
-                        3,
-                        len(st.session_state.chunks)
-                    )
+            else:
 
-                    scores, indices = st.session_state.index.search(
-                        np.asarray(
-                            query_embedding,
-                            dtype="float32"
-                        ),
-                        number_of_results
-                    )
+                answer = (
+                    "I couldn't find relevant information "
+                    "in your uploaded PDFs. "
+                    "Try asking the question differently."
+                )
 
-                    retrieved_chunks = []
+            st.markdown(answer)
 
-                    for idx in indices[0]:
-                        if idx >= 0:
-                            retrieved_chunks.append({
-                                "page": st.session_state.pages[idx],
-                                "text": st.session_state.chunks[idx]
-                            })
+        # Save assistant response
+        subject["messages"].append({
+            "role": "assistant",
+            "content": answer,
+            "sources": retrieved_chunks,
+        })
 
-                    context = "\n\n".join([
-                        f"Page {item['page']}: {item['text']}"
-                        for item in retrieved_chunks
-                    ])
+        st.rerun()
 
-                    prompt = f"""
-You are MiniDoc AI, a helpful PDF assistant.
 
-Answer the user's question using ONLY the provided PDF context.
+# ==================================================
+# 8. PDF VIEWER
+# ==================================================
 
-Instructions:
-1. Read the context carefully.
-2. Answer in simple, clear English.
-3. Information may be expressed in different words.
-4. Do not invent facts or use outside knowledge.
-5. If the answer is genuinely missing, say:
-   "I couldn't find this information in the PDF."
+with viewer_column:
 
-PDF CONTEXT:
-{context}
+    st.markdown("### 📖 PDF Reader")
 
-USER QUESTION:
-{question}
+    document_hash = st.session_state.viewer_document
 
-ANSWER:
-"""
+    # Select first document by default
+    if (
+        document_hash not in subject["documents"]
+        or document_hash is None
+    ):
 
-                    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        document_hash = next(
+            iter(subject["documents"])
+        )
 
-                    response = client.chat.completions.create(
-                        model="openai/gpt-oss-20b",
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": prompt
-                            }
-                        ],
-                        temperature=0.2,
-                        max_completion_tokens=300
-                    )
+        st.session_state.viewer_document = document_hash
 
-                    answer = response.choices[0].message.content
+    selected_document = subject["documents"][
+        document_hash
+    ]
 
-                    st.markdown(answer)
+    document_options = list(
+        subject["documents"].keys()
+    )
 
-                    with st.expander("📚 View retrieved sources"):
-                        for item in retrieved_chunks:
-                            st.markdown(
-                                f"**Page {item['page']}**"
-                            )
-                            st.write(item["text"])
+    selected_document_hash = st.selectbox(
+        "Choose PDF",
+        options=document_options,
+        index=document_options.index(document_hash),
+        format_func=lambda key: subject["documents"][key]["name"],
+        key="viewer_document_selector",
+    )
 
-                    active_chat["messages"].append({
-                        "role": "assistant",
-                        "content": answer,
-                        "sources": retrieved_chunks
-                    })
+    if selected_document_hash != document_hash:
 
-        except Exception as e:
+        st.session_state.viewer_document = selected_document_hash
 
-            error_message = (
-                "I couldn't generate an answer. "
-                "Please check that Groq API is configured correctly."
-            )
+        st.session_state.viewer_page = 1
 
-            st.error(error_message)
-            st.caption(str(e))
+        st.rerun()
 
-            active_chat["messages"].append({
-                "role": "assistant",
-                "content": error_message
-            })
+    selected_document = subject["documents"][
+        selected_document_hash
+    ]
 
+    total_pages = selected_document["total_pages"]
+
+    # Page selection
+    selected_page = st.number_input(
+        "Selected source page",
+        min_value=1,
+        max_value=max(1, total_pages),
+        value=min(
+            max(1, st.session_state.viewer_page),
+            max(1, total_pages),
+        ),
+        step=1,
+        key="viewer_page_selector",
+    )
+
+    st.session_state.viewer_page = selected_page
+
+    # Display PDF
+    show_pdf_viewer(
+        document=selected_document,
+        page_number=selected_page,
+    )

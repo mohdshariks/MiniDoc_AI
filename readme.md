@@ -16,7 +16,7 @@ MiniDoc AI is a beginner-friendly AI-powered PDF chatbot built using Retrieval-A
 - PyPDF
 - Sentence Transformers
 - FAISS
-- Ollama
+- Groq
 
 ## Run Locally
 
